@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>HTML 一鍵發布器</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+:root {
+  --bg:#f5f6f8; --card:#fff; --text:#202124; --muted:#5f6368;
+  --line:#dadce0; --blue:#1a73e8; --green:#188038; --red:#b3261e;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",sans-serif}
+.wrap{max-width:760px;margin:auto;padding:16px}
+h1{font-size:24px;margin:6px 0 4px}
+.sub{color:var(--muted);line-height:1.65;margin:0 0 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin:12px 0;box-shadow:0 2px 8px rgba(0,0,0,.04)}
+label{display:block;font-weight:700;margin:10px 0 7px}
+input[type=file],input[type=text]{width:100%;font-size:16px;padding:12px;border:1px solid #c9cdd2;border-radius:10px;background:#fff}
+button,a.btn{border:0;border-radius:10px;padding:12px 14px;font-size:15px;font-weight:700;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}
+.primary{background:var(--blue);color:#fff}
+.green{background:var(--green);color:#fff}
+.gray{background:#eef0f2;color:#303134}
+button:disabled{opacity:.45;cursor:not-allowed}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+.row>*{flex:1 1 155px}
+.status{margin-top:12px;padding:11px 12px;border-radius:10px;background:#f1f3f4;line-height:1.55;white-space:pre-wrap;word-break:break-word}
+.good{background:#e6f4ea;color:#137333}
+.warn{background:#fef7e0;color:#8d4b00}
+.bad{background:#fce8e6;color:#b3261e}
+.hidden{display:none!important}
+.steps{margin:12px 0 0;padding:0;list-style:none}
+.steps li{padding:8px 0;border-bottom:1px solid #eee;color:#5f6368}
+.steps li:last-child{border-bottom:0}
+.steps li.done{color:#137333;font-weight:700}
+.url{word-break:break-all;background:#f8f9fa;border:1px solid #e5e7eb;padding:10px;border-radius:8px;font-size:13px}
+.small{font-size:13px;color:var(--muted);line-height:1.6}
+@media(max-width:600px){.wrap{padding:10px}.card{padding:13px}h1{font-size:21px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>HTML 一鍵發布器</h1>
+  <p class="sub">選擇 HTML → Google 授權 → 自動建立 Apps Script → 自動寫入 HTML → 自動建立版本與部署。</p>
+
+  <div class="card">
+    <label>① 選擇 HTML 檔</label>
+    <input id="file" type="file" accept=".html,.htm,text/html">
+    <div id="fileInfo" class="status">尚未選擇檔案</div>
+
+    <label>專案名稱</label>
+    <input id="title" type="text" value="HTML Web App">
+
+    <div class="row">
+      <button id="authBtn" class="primary">② 登入 Google 並授權</button>
+      <button id="publishBtn" class="green" disabled>③ 一鍵建立並發布</button>
+    </div>
+
+    <div id="authStatus" class="status">尚未取得 Google 授權。</div>
+  </div>
+
+  <div id="progressCard" class="card hidden">
+    <strong>發布進度</strong>
+    <ul class="steps">
+      <li id="s1">1. 建立 Apps Script 專案</li>
+      <li id="s2">2. 寫入 Code.gs / Index.html / appsscript.json</li>
+      <li id="s3">3. 建立 Apps Script 版本</li>
+      <li id="s4">4. 建立網頁應用程式部署</li>
+    </ul>
+    <div id="progressMsg" class="status">準備中…</div>
+  </div>
+
+  <div id="resultCard" class="card hidden">
+    <strong>發布完成</strong>
+    <p class="small">Apps Script 專案 ID：</p>
+    <div id="scriptId" class="url"></div>
+    <p class="small">網頁網址：</p>
+    <div id="webUrl" class="url"></div>
+    <div class="row">
+      <a id="openWeb" class="btn primary" target="_blank" rel="noopener">開啟網頁</a>
+      <button id="copyUrl" class="gray">複製網址</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <strong>注意</strong>
+    <p class="small">這個工具只把 Google OAuth 的 Client ID 放在網頁裡，這是網頁 OAuth 的正常做法。Client Secret 不會放進這個檔案。Google 的存取權杖只保留在目前瀏覽器記憶體中，不會寫進 GitHub。</p>
+  </div>
+</div>
+
+<script>
+const CLIENT_ID = '362092156460-lbb37ocvv25ct1tmkstqu5k4fr3l5uaa.apps.googleusercontent.com';
+const SCOPES = [
+  'https://www.googleapis.com/auth/script.projects',
+  'https://www.googleapis.com/auth/script.deployments'
+].join(' ');
+
+let tokenClient = null;
+let accessToken = '';
+let selectedHtml = '';
+let selectedName = '';
+
+const $ = id => document.getElementById(id);
+
+function msg(id, text, kind='') {
+  const el = $(id);
+  el.textContent = text;
+  el.className = 'status' + (kind ? ' ' + kind : '');
+}
+
+function markDone(id) {
+  $(id).classList.add('done');
+  $(id).textContent = '✓ ' + $(id).textContent.replace(/^✓\s*/, '');
+}
+
+function initTokenClient() {
+  if (!window.google || !google.accounts || !google.accounts.oauth2) return false;
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: CLIENT_ID,
+    scope: SCOPES,
+    callback: (resp) => {
+      if (resp.error) {
+        msg('authStatus', 'Google 授權失敗：' + (resp.error_description || resp.error), 'bad');
+        return;
+      }
+      accessToken = resp.access_token || '';
+      if (accessToken) {
+        msg('authStatus', 'Google 授權成功。現在可以按「一鍵建立並發布」。', 'good');
+        refreshButtons();
+      }
+    }
+  });
+  return true;
+}
+
+$('authBtn').addEventListener('click', () => {
+  if (!tokenClient && !initTokenClient()) {
+    msg('authStatus', 'Google 登入元件尚未載入，請等幾秒再按一次。', 'warn');
+    return;
+  }
+  tokenClient.requestAccessToken({prompt: accessToken ? '' : 'consent'});
+});
+
+$('file').addEventListener('change', async function() {
+  const f = this.files && this.files[0];
+  selectedHtml = '';
+  selectedName = '';
+  if (!f) {
+    msg('fileInfo', '尚未選擇檔案');
+    refreshButtons();
+    return;
+  }
+  try {
+    selectedHtml = await f.text();
+    selectedName = f.name;
+    if ($('title').value === 'HTML Web App') {
+      $('title').value = f.name.replace(/\.html?$/i,'') || 'HTML Web App';
+    }
+    msg('fileInfo', `已載入：${f.name}（約 ${Math.max(1, Math.round(f.size/1024))} KB）`, 'good');
+  } catch (e) {
+    msg('fileInfo', '讀取檔案失敗：' + e.message, 'bad');
+  }
+  refreshButtons();
+});
+
+function refreshButtons() {
+  $('publishBtn').disabled = !(selectedHtml.trim() && accessToken);
+}
+
+async function api(url, options={}) {
+  const headers = Object.assign({
+    'Authorization': 'Bearer ' + accessToken,
+    'Content-Type': 'application/json'
+  }, options.headers || {});
+  const res = await fetch(url, Object.assign({}, options, {headers}));
+  const text = await res.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch { data = {raw:text}; }
+  if (!res.ok) {
+    const detail = data && data.error && (data.error.message || data.error.status)
+      ? (data.error.message || data.error.status)
+      : (text || ('HTTP ' + res.status));
+    throw new Error(detail);
+  }
+  return data;
+}
+
+function buildFiles(htmlSource) {
+  const code = `function doGet() {
+  return HtmlService
+    .createHtmlOutputFromFile('Index')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}`;
+
+  const manifest = {
+    timeZone: "Asia/Taipei",
+    dependencies: {},
+    exceptionLogging: "STACKDRIVER",
+    runtimeVersion: "V8",
+    webapp: {
+      access: "ANYONE_ANONYMOUS",
+      executeAs: "USER_DEPLOYING"
+    }
+  };
+
+  return [
+    {name:'Code', type:'SERVER_JS', source:code},
+    {name:'Index', type:'HTML', source:htmlSource},
+    {name:'appsscript', type:'JSON', source:JSON.stringify(manifest, null, 2)}
+  ];
+}
+
+$('publishBtn').addEventListener('click', async () => {
+  if (!selectedHtml.trim() || !accessToken) return;
+
+  $('publishBtn').disabled = true;
+  $('progressCard').classList.remove('hidden');
+  $('resultCard').classList.add('hidden');
+  ['s1','s2','s3','s4'].forEach(id => {
+    $(id).classList.remove('done');
+    $(id).textContent = $(id).textContent.replace(/^✓\s*/, '');
+  });
+
+  const title = ($('title').value || 'HTML Web App').trim();
+
+  try {
+    msg('progressMsg', '正在建立 Apps Script 專案…');
+
+    // 1) 建立 Apps Script 專案
+    const project = await api('https://script.googleapis.com/v1/projects', {
+      method:'POST',
+      body:JSON.stringify({title})
+    });
+    const scriptId = project.scriptId;
+    if (!scriptId) throw new Error('Google 沒有回傳 scriptId。');
+    markDone('s1');
+
+    // 2) 寫入程式內容
+    msg('progressMsg', '正在上傳 HTML 與 Apps Script 程式…');
+    await api(`https://script.googleapis.com/v1/projects/${encodeURIComponent(scriptId)}/content`, {
+      method:'PUT',
+      body:JSON.stringify({files: buildFiles(selectedHtml)})
+    });
+    markDone('s2');
+
+    // 3) 建立版本
+    msg('progressMsg', '正在建立版本…');
+    const version = await api(`https://script.googleapis.com/v1/projects/${encodeURIComponent(scriptId)}/versions`, {
+      method:'POST',
+      body:JSON.stringify({description:'Published by HTML Publisher'})
+    });
+    const versionNumber = version.versionNumber;
+    if (versionNumber === undefined || versionNumber === null) {
+      throw new Error('Google 沒有回傳版本號。');
+    }
+    markDone('s3');
+
+    // 4) 建立部署
+    msg('progressMsg', '正在建立網頁應用程式部署…');
+    const deployment = await api(`https://script.googleapis.com/v1/projects/${encodeURIComponent(scriptId)}/deployments`, {
+      method:'POST',
+      body:JSON.stringify({
+        versionNumber: versionNumber,
+        manifestFileName: 'appsscript',
+        description: 'HTML Publisher web app'
+      })
+    });
+    markDone('s4');
+
+    let webUrl = '';
+    if (deployment.entryPoints && Array.isArray(deployment.entryPoints)) {
+      for (const ep of deployment.entryPoints) {
+        if (ep && ep.webApp && ep.webApp.url) {
+          webUrl = ep.webApp.url;
+          break;
+        }
+      }
+    }
+
+    $('scriptId').textContent = scriptId;
+    $('webUrl').textContent = webUrl || '部署已建立，但 Google 回應中沒有找到 webApp.url。';
+    $('openWeb').href = webUrl || '#';
+    $('openWeb').classList.toggle('hidden', !webUrl);
+
+    localStorage.setItem('htmlPublisher.lastScriptId', scriptId);
+    if (deployment.deploymentId) {
+      localStorage.setItem('htmlPublisher.lastDeploymentId', deployment.deploymentId);
+    }
+
+    msg('progressMsg', webUrl ? '發布成功。' : '部署完成，但沒有取得公開網址。', webUrl ? 'good' : 'warn');
+    $('resultCard').classList.remove('hidden');
+  } catch (e) {
+    console.error(e);
+    let extra = '';
+    const m = String(e && e.message ? e.message : e);
+    if (/access|permission|scope|403|forbidden/i.test(m)) {
+      extra = '\n\n如果畫面顯示存取被拒絕，請確認你的 Google 帳號已加入 OAuth「測試使用者」。';
+    }
+    msg('progressMsg', '發布失敗：' + m + extra, 'bad');
+  } finally {
+    refreshButtons();
+  }
+});
+
+$('copyUrl').addEventListener('click', async () => {
+  const t = $('webUrl').textContent.trim();
+  try {
+    await navigator.clipboard.writeText(t);
+    const old = $('copyUrl').textContent;
+    $('copyUrl').textContent = '已複製';
+    setTimeout(() => $('copyUrl').textContent = old, 1200);
+  } catch {
+    alert('請長按網址手動複製。');
+  }
+});
+
+window.addEventListener('load', () => {
+  setTimeout(() => initTokenClient(), 500);
+});
+</script>
+</body>
+</html>
